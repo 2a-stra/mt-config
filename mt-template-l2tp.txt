@@ -1,0 +1,155 @@
+# model = RB4011iGS+
+
+/interface bridge
+add name=bridge
+
+/interface list
+add comment=defconf name=WAN
+add comment=defconf name=LAN
+
+/ip dhcp-server option
+add code=43 name=config value=\
+    {CODE43}
+add code=66 name=option66 value=\
+    {CODE66}
+/ip dhcp-server option sets
+add name=options options=config,option66
+/ip pool
+add comment=mngt name=dhcp-5-mngt ranges={MNGT_PRE}.{SITE}.90-{MNGT_PRE}.{SITE}.99
+add comment=core name=dhcp-10-core ranges={CORE_PRE}.{SITE}.90-{CORE_PRE}.{SITE}.99
+add comment=sip-phones name=dhcp-20-voip ranges={DHCP_START}-{DHCP_END}
+/ip dhcp-server
+add address-pool=dhcp-20-voip comment=sip-phones dhcp-option-set=options \
+    interface=ether2 lease-time=3d name=voip-20
+add address-pool=dhcp-5-mngt comment=mngt interface=ether5 lease-time=1h \
+    name=mngt-5
+add address-pool=dhcp-10-core interface=ether1 lease-time=1h name=core
+
+/port
+set 0 name=serial0
+set 1 name=serial1
+
+/interface l2tp-client
+add connect-to={NET_PRE}.{SITE}.1 disabled=no name=l2tp-{SITE_NAME}\
+   profile=default user=user{SITE_NAME} password={L2TP_PASS}
+
+/routing ospf instance
+add disabled=no name=ospf-instance-1 out-filter-chain=ospf-out \
+    out-filter-select="" redistribute=connected,static router-id={NET_PRE}.{SITE}.2
+/routing ospf area
+add disabled=no instance=ospf-instance-1 name=ospf-area-1
+
+/interface bridge port
+add bridge=bridge comment=defconf disabled=yes interface=ether1
+add bridge=bridge comment=defconf disabled=yes interface=ether2
+add bridge=bridge comment=defconf disabled=yes interface=ether5
+add bridge=bridge comment=defconf disabled=yes interface=ether10
+add bridge=bridge comment=defconf disabled=yes interface=sfp-sfpplus1
+/interface list member
+add interface=ether1 list=LAN
+add interface=ether2 list=LAN
+add interface=ether5 list=LAN
+add interface=ether10 list=WAN
+add interface=l2tp-{SITE_NAME} list=WAN
+
+/ip address
+add address={CORE_PRE}.{SITE}.1/24 comment=core interface=ether1 network={CORE_PRE}.{SITE}.0
+add address={SIP_NET}.1/23 comment=voip interface=ether2 network={SIP_NET}.0
+add address={MNGT_PRE}.{SITE}.1/24 comment=mngt interface=ether5 network={MNGT_PRE}.{SITE}.0
+add address={NET_PRE}.{SITE}.2/30 comment=net interface=ether10 network={NET_PRE}.{SITE}.0
+
+/ip dhcp-server network
+add address={MNGT_PRE}.{SITE}.0/24 comment=mngt dns-server={MNGT_PRE}.{SITE}.1 gateway={MNGT_PRE}.{SITE}.1 \
+    netmask=24 ntp-server={MNGT_PRE}.{SITE}.1
+add address={CORE_PRE}.{SITE}.0/24 comment=core dns-server={CORE_PRE}.{SITE}.1 gateway={CORE_PRE}.{SITE}.1 \
+    netmask=24 ntp-server={CORE_PRE}.{SITE}.1
+add address={SIP_NET}.0/23 comment=sip-phones dhcp-option=*3 dns-server=\
+    {SIP_NET}.1 gateway={SIP_NET}.1 netmask=23 ntp-server={SIP_NET}.1
+
+/ip dns
+set allow-remote-requests=yes
+/ip dns static
+add address={MNGT_PRE}.{SITE}.1 name=r{SITE_NAME} type=A
+add address={MNGT_PRE}.0.2 name=r1 type=A
+add address={MNGT_PRE}.0.3 name=r2 type=A
+
+/ip firewall address-list
+add address={CORE_PRE}.0.11 list=mngt
+add address={SIP_PRE}.0.10 list=mngt
+/ip firewall filter
+add action=fasttrack-connection chain=forward comment="defconf: fasttrack" \
+    connection-state=established,related hw-offload=yes
+add action=accept chain=input comment=\
+    "defconf: accept established,related,untracked" connection-state=\
+    established,related,untracked
+add action=drop chain=input comment="defconf: drop invalid" connection-state=\
+    invalid
+add action=accept chain=input comment=OSPF protocol=ospf
+add action=accept chain=input comment="defconf: accept ICMP" protocol=icmp
+add action=accept chain=input comment="All from LAN" in-interface-list=LAN
+add action=accept chain=input comment="Remote mngt" dst-address={MNGT_PRE}.{SITE}.1 \
+    dst-port=22,80,443,8291 in-interface-list=WAN protocol=tcp src-address=\
+    {MNGT_PRE}.0.0/24
+add action=drop chain=input comment=\
+    "Drop all other unsolicited WAN to Router" in-interface-list=WAN
+add action=accept chain=forward comment=\
+    "defconf: accept established,related, untracked" connection-state=\
+    established,related,untracked
+add action=drop chain=forward comment="defconf: drop invalid" \
+    connection-state=invalid
+add action=reject chain=forward comment="Reject mngt ports to remote" \
+    dst-port=22,80,443,8291 in-interface=ether2 protocol=tcp reject-with=\
+    icmp-network-unreachable
+add action=accept chain=forward comment=LAN-to-LAN in-interface-list=LAN \
+    out-interface-list=LAN
+add action=accept chain=forward comment=LAN-2-WAN in-interface-list=LAN \
+    out-interface-list=WAN
+add action=accept chain=forward comment=WAN-2-LAN in-interface-list=WAN \
+    out-interface-list=LAN
+add action=drop chain=forward comment="Drop everything else"
+/ip firewall nat
+add action=masquerade chain=srcnat comment="defconf: masquerade" disabled=yes \
+    ipsec-policy=out,none out-interface-list=WAN
+/ip firewall service-port
+set h323 disabled=yes
+set sip disabled=yes
+
+/ip service
+set telnet disabled=yes
+set ftp disabled=yes
+set www disabled=yes
+set ssh address={MNGT_PRE}.0.0/24,{MNGT_PRE}.{SITE}.0/24
+set www-ssl address={MNGT_PRE}.0.0/24,{MNGT_PRE}.{SITE}.0/24 disabled=no
+set winbox address={MNGT_PRE}.0.0/24,{MNGT_PRE}.{SITE}.0/24
+
+/routing filter rule
+add chain=ospf-out disabled=no rule=\
+    "if (dst == 192.168.88.0/24) {reject}\r\
+    \n"
+add chain=ospf-out disabled=no rule=accept
+add chain=OSPF-IN-FILTER disabled=yes rule=\
+    "if (dst == {CORE_PRE}.0.0/24) { reject } else { accept }"
+/routing ospf interface-template
+add area=ospf-area-1 cost=10 disabled=yes interfaces=ether10
+add area=ospf-area-1 disabled=no interfaces=ether1 passive type=ptp
+add area=ospf-area-1 disabled=no interfaces=ether2 passive type=ptp
+add area=ospf-area-1 disabled=no interfaces=ether5 passive type=ptp
+add area=ospf-area-1 disabled=no interfaces=l2tp-{SITE_NAME} type=ptp
+
+/system clock
+set time-zone-autodetect=no time-zone-name=Asia/Yerevan
+/system identity
+set name=r{SITE_NAME}
+/system logging
+add topics=ospf
+/system note
+set show-at-login=no
+/system ntp client
+set enabled=yes
+/system ntp server
+set enabled=yes
+/system ntp client servers
+add address={NET_PRE}.1.1
+add address={NET_PRE}.1.2
+/system routerboard settings
+set enter-setup-on=delete-key
